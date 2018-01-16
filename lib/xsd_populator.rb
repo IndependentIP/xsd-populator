@@ -314,7 +314,7 @@ class XsdPopulator
   end
 
   def build?(element, provider, stack, opts = {})
-    content = opts[:content] || provider.try_take([stack, element.name].flatten.compact)
+    content = opts.has_key?(:content) ? opts[:content] : provider.try_take([stack, element.name].flatten.compact)
 
     # we got an Informer object that tells us explicitly to skip this node? Yes sir.
     return false if content.is_a?(Informer) && content.skip?
@@ -322,9 +322,9 @@ class XsdPopulator
     # For comlex nodes we need either;
     # - a data provider or
     # - explicit confirmation to build without providers or
-    # - providers available for offspring elements
-    if element.child_elements? 
-      return content.respond_to?(:try_take) || build_node_without_provider? || provider.has_providers_with_scope?(stack + [element.name])
+    # - providers CONTAINING DATA available for offspring elements
+    if element.child_elements?
+      return content.respond_to?(:try_take) || build_node_without_provider? || provider.has_filled_providers_with_scope?(stack + [element.name]) || provider.force_build_node?(stack + [element.name])
     end
 
     # we got a non-nil value for a simple node? Go ahead
