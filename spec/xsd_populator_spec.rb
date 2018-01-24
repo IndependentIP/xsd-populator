@@ -144,6 +144,7 @@ describe "XsdPopulator for partial layouts" do
       include DataProvider::Base
 
       provides({
+        ['NewReleaseMessage', 'CollectionList', 'Collection', 'CollectionId'] => nil,
         ['NewReleaseMessage', 'DealList', 'ReleaseDeal'] => 'Invalid value; ReleaseDeal is a complex node with child-nodes, it should get a DataProvider, not a string',
         ['NewReleaseMessage', 'ReleaseList'] => 'Invalid again',
         ['NewReleaseMessage', 'ResourceList'] => StrategyProvider.new,
@@ -164,6 +165,9 @@ describe "XsdPopulator for partial layouts" do
     it "defaults to the :smart strategy which doesn't add nodes for which no (valid) data is provided, unless there are providers available for any its offspring nodes" do
       xml = populator.populated_xml
       doc = Nokogiri.XML(xml)
+      # There is no Dataprovider for Collection, There is a provider for one of its offsprings [CollectionId]
+      # However this provider returns nil and so the 'Collection' node should also not be built.
+      expect(doc.search("/NewReleaseMessage/CollectionList/Collection").length).to eq 0
       # There's a provider available for ReleaseDeal, an offspring of DealList, and
       # even though it will return invalid data, it will still cause the DealList node to be created
       expect(doc.search("/NewReleaseMessage/DealList").length).to eq 1
@@ -206,6 +210,58 @@ describe "XsdPopulator for partial layouts" do
       expect(doc.at("/NewReleaseMessage").attributes['LanguageAndScriptCode']).to eq nil
       expect(doc.at("/NewReleaseMessage/MessageHeader").attributes['LanguageAndScriptCode']).to eq nil
       expect(doc.at("/NewReleaseMessage/MessageHeader/SentOnBehalfOf").attributes['LanguageAndScriptCode'].value).to eq 'UK'
+    end
+  end
+
+  describe 'Choicegroups' do
+    class ChoiceProvider
+      include DataProvider::Base
+
+      provides({
+        ['NewReleaseMessage', 'CollectionList', 'Collection', 'CollectionDetailsByTerritory', 'TerritoryCode'] => 'EN',
+        ['NewReleaseMessage', 'CollectionList', 'Collection', 'CollectionDetailsByTerritory', 'ExcludedTerritoryCode'] => 'NL',
+        ['NewReleaseMessage', 'ResourceList', 'SoundRecording', 'SoundRecordingDetailsByTerritory', 'ResourceContributor', 'PartyName', 'FullName'] => 'Name',
+        ['NewReleaseMessage', 'ResourceList', 'SoundRecording', 'SoundRecordingDetailsByTerritory', 'ResourceContributor', 'PartyId'] => 'Id',
+      })
+    end
+
+    let(:populator){
+      XsdPopulator.new({
+        :reader => xsd_reader,
+        :provider => ChoiceProvider.new,
+        :logger => logger
+      })
+    }
+
+    describe 'With smart strategy' do
+
+      it 'Raises an error when no valid choice can be made from the provided data and the strategy is smart' do
+        expect{populator.populate_element(['NewReleaseMessage', 'CollectionList'])}.to raise_error(XsdPopulator::NoValidChoiceProvidedException)
+      end
+
+      it 'Only populates the correct choice group if valid data is provided and the strategy is smart' do
+        xml = populator.populate_element(['NewReleaseMessage', 'ResourceList'])
+        doc = Nokogiri.XML(xml)
+        parent_node = doc.at("/ResourceList/SoundRecording/SoundRecordingDetailsByTerritory/ResourceContributor")
+
+        expect(parent_node.element_children.length).to eq 2
+        expect(parent_node.element_children.first.name).to eq 'PartyName'
+        expect(parent_node.element_children.last.name).to eq 'PartyId'
+      end
+    end
+
+    describe 'With complete strategy' do
+
+      before do
+        populator.configure(strategy: :complete, element: ['NewReleaseMessage', 'CollectionList'])
+      end
+
+      it 'Fills all the choice elements that have data, ignoring the choice group mechanism' do
+        xml = populator.populated_xml
+        doc = Nokogiri.XML(xml)
+        expect(doc.at("/CollectionList/Collection/CollectionDetailsByTerritory/TerritoryCode").inner_text).to eq 'EN'
+        expect(doc.at("/CollectionList/Collection/CollectionDetailsByTerritory/ExcludedTerritoryCode").inner_text).to eq 'NL'
+      end
     end
   end
 
