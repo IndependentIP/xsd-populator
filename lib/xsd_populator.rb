@@ -9,6 +9,9 @@ class XsdPopulator
   class ElementNotFoundException < Exception
   end
 
+  class NoValidChoiceProvidedException < Exception
+  end
+
   attr_reader :options
 
   def initialize(_opts = {})
@@ -175,7 +178,7 @@ class XsdPopulator
       end
 
       # simple node; name, value, attributes
-      if !element.child_elements?
+      if !element.child_elements_or_choices?
         cont = node_content.is_a?(Informer) && node_content.content? ? node_content.content : node_content
         xml.tag!(element.name, cont, attributes_hash)
         next
@@ -198,16 +201,73 @@ class XsdPopulator
         node_name = "#{node_content.namespace}:#{node_name}"
       end
 
-      xml.tag!(node_name, attributes_hash) do
-        # loop over all child node definitions
-        element.elements.each do |child|
-          # this method call itself recursively for every child node definition of the current element
-          build_element(xml, child, child_provider, stack + [element.name])
+      if !element.choice? || ignore_choice_groups?
+        method_name = ignore_choice_groups? ? :elements : :elements_and_choices
+        xml.tag!(node_name, attributes_hash) do
+          # loop over all child node definitions
+          element.send(method_name).each do |child|
+            # this method call itself recursively for every child node definition of the current element
+            build_element(xml, child, child_provider, stack + [element.name])
+          end
+        end
+      else
+        child_elements = get_child_group_for_choice_element(element, provider, stack)
+        child_elements.each do |child|
+          build_element(xml, child, child_provider, stack)
         end
       end
     end
   end
 
+  #
+  # Choice groups
+  #
+
+  def ignore_choice_groups?
+    strategy == :complete
+  end
+
+  def get_child_group_for_choice_element(element, provider, stack)
+    # Loop over each choice group and decide if based on the provided data we can choose one
+    # If no valid choice can be made we cant create valid xml so raise an exception.
+
+    choice_groups = element.elements_and_choices
+    unique_elements = choice_groups.flatten.uniq{ |element| element.name || element }
+    return unique_elements if no_filled_providers_for_given_scope?(unique_elements.map(&:name), provider, stack)
+
+    choice_groups.each do |group|
+      return group if valid_choice_group?(choice_groups, group, element, provider, stack)
+    end
+    raise NoValidChoiceProvidedException.new(:message => "The provided data did not specify a valid choice to be made for element: #{element.parent.name || element.parent.parent.name}")
+  end
+
+  def valid_choice_group?(choice_groups, group, element, provider, stack)
+    # Based on the provided data we should be able to decide which choice group should be used based on two conditions:
+    # 1. There is data provided for at least one of the elements (or its children) inside a choice group
+    # 2. No data is provided for elements (or its children) that only occur outside of that choice group
+
+    names = group.map(&:name).compact
+    unique_elements_outside_of_group = choice_groups.flatten.map(&:name).compact.uniq - names
+
+    has_any_providers_with_data = filled_providers_for_given_scope?(names, provider, stack)
+    return false if !has_any_providers_with_data
+
+    has_no_out_of_scope_provider_with_data = no_filled_providers_for_given_scope?(unique_elements_outside_of_group, provider, stack)
+
+    has_any_providers_with_data && has_no_out_of_scope_provider_with_data
+  end
+
+  def no_filled_providers_for_given_scope?(provider_ids, provider, stack)
+    provider_ids_with_filled_data(provider_ids, provider, stack).empty?
+  end
+
+  def filled_providers_for_given_scope?(provider_ids, provider, stack)
+    provider_ids_with_filled_data(provider_ids, provider, stack).any?
+  end
+
+  def provider_ids_with_filled_data(provider_ids, provider, stack)
+    provider_ids.select{ |name| provider.has_filled_providers_with_scope?(stack + [name], include_current: true) }
+  end
 
   #
   # Attribute data
@@ -323,8 +383,9 @@ class XsdPopulator
     # - a data provider or
     # - explicit confirmation to build without providers or
     # - providers CONTAINING DATA available for offspring elements
-    if element.child_elements?
-      return content.respond_to?(:try_take) || build_node_without_provider? || provider.has_filled_providers_with_scope?(stack + [element.name]) || provider.force_build_node?(stack + [element.name])
+    # - a choice element
+    if element.child_elements_or_choices?
+      return element.choice? || content.respond_to?(:try_take) || build_node_without_provider? || provider.has_filled_providers_with_scope?(stack + [element.name]) || provider.force_build_node?(stack + [element.name])
     end
 
     # we got a non-nil value for a simple node? Go ahead
