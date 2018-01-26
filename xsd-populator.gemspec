@@ -1,5 +1,5 @@
 Gem::Specification.new do |s|
-  s.name = "xsd-populator"
+  s.name = "xsd-populator-fuga"
   s.version = '0.2.2'
   s.date = '2016-01-23'
   s.files = `git ls-files`.split($/)
