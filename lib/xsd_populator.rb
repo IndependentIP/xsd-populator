@@ -211,7 +211,7 @@ class XsdPopulator
           end
         end
       else
-        child_elements = get_child_group_for_choice_element(element, provider, stack)
+        child_elements = get_child_group_for_choice_element(element, child_provider, stack)
         child_elements.each do |child|
           build_element(xml, child, child_provider, stack)
         end
@@ -230,9 +230,9 @@ class XsdPopulator
   def get_child_group_for_choice_element(element, provider, stack)
     # Loop over each choice group and decide if based on the provided data we can choose one
     # If no valid choice can be made we cant create valid xml so raise an exception.
-
     choice_groups = element.elements_and_choices
     unique_elements = choice_groups.flatten.uniq{ |element| element.name || element }
+
     return unique_elements if no_filled_providers_for_given_scope?(unique_elements.map(&:name), provider, stack)
 
     choice_groups.each do |group|
